@@ -1,0 +1,12 @@
+[project]
+name = "aeroforge"
+version = "0.1.0"
+description = "Read-only GitHub workflow intelligence and bounded local static CI checks"
+requires-python = ">=3.11"
+
+[project.scripts]
+aeroforge = "aeroforge.cli:cli"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
