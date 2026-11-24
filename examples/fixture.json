@@ -1,0 +1,11 @@
+{
+  "schema": "aeroforge.fixture.v1",
+  "repositories": [
+    {"full_name": "example/website", "visibility": "private", "default_branch": "main", "workflows": [
+      {"name": "Website CI", "path": ".github/workflows/test.yml", "content": "name: CI\non:\n  push:\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo 'sample only'\n"}
+    ]},
+    {"full_name": "example/release", "visibility": "public", "default_branch": "main", "workflows": [
+      {"name": "Release", "path": ".github/workflows/release.yml", "content": "name: Release\non:\n  workflow_dispatch:\njobs:\n  release:\n    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    steps:\n      - run: echo 'manual release example'\n"}
+    ]}
+  ]
+}
