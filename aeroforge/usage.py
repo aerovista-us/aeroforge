@@ -40,6 +40,9 @@ def ensure_schema(con):
       repo TEXT NOT NULL,
       workflow_id INTEGER,
       workflow_name TEXT NOT NULL,
+      head_sha TEXT,
+      head_branch TEXT,
+      run_attempt INTEGER,
       event TEXT NOT NULL,
       status TEXT NOT NULL,
       conclusion TEXT,
@@ -65,6 +68,12 @@ def ensure_schema(con):
     CREATE INDEX IF NOT EXISTS usage_runs_scan ON usage_runs(scan_id,repo);
     CREATE INDEX IF NOT EXISTS usage_jobs_scan ON usage_jobs(scan_id,repo);
     ''')
+    # Existing V0.2 databases must continue to work after an in-place upgrade.
+    columns={row['name'] for row in con.execute('PRAGMA table_info(usage_runs)')}
+    for name,kind in (('head_sha','TEXT'),('head_branch','TEXT'),('run_attempt','INTEGER')):
+        if name not in columns:
+            con.execute(f'ALTER TABLE usage_runs ADD COLUMN {name} {kind}')
+    con.execute('CREATE INDEX IF NOT EXISTS usage_runs_commit ON usage_runs(scan_id,repo,workflow_id,head_sha)')
     con.commit()
 
 
@@ -83,6 +92,13 @@ def job_duration_seconds(job):
     if not start or not end or end < start:
         return None
     return int((end-start).total_seconds())
+
+
+def canonical_sha(value):
+    """Use commit SHAs only if they are actual 40-character hex identifiers."""
+    if isinstance(value,str) and re.fullmatch(r'[0-9a-fA-F]{40}',value):
+        return value.lower()
+    return None
 
 
 def runner_kind(job):
@@ -147,10 +163,51 @@ def _summary(con, scan_id):
             ON f.repo=w.repo AND f.path=w.path
             WHERE w.repo=? AND w.name=?''', (item['repo'],item['workflow_name'])).fetchone()[0]
         item['workflow_review_findings'] = candidates
+    # These are observed pairs, not estimates of wasted or billable minutes.
+    # PR merge refs often have a different SHA from the push commit, so no match
+    # does NOT mean there were no duplicate executions.
+    matched=con.execute('''
+        SELECT repo, workflow_id, head_sha,
+          MIN(workflow_name) AS workflow_name,
+          COUNT(DISTINCT run_id) AS run_count
+        FROM usage_runs
+        WHERE scan_id=? AND workflow_id IS NOT NULL AND head_sha IS NOT NULL
+          AND length(head_sha)=40 AND event IN ('push','pull_request')
+        GROUP BY repo, workflow_id, head_sha
+        HAVING SUM(CASE WHEN event='push' THEN 1 ELSE 0 END)>0
+           AND SUM(CASE WHEN event='pull_request' THEN 1 ELSE 0 END)>0
+        ORDER BY repo,workflow_id,head_sha LIMIT 100
+    ''',(scan_id,)).fetchall()
+    overlap=[]
+    for item in matched:
+        ids=con.execute('''SELECT run_id, event FROM usage_runs
+          WHERE scan_id=? AND repo=? AND workflow_id=? AND head_sha=?
+            AND event IN ('push','pull_request') ORDER BY run_id''',
+          (scan_id,item['repo'],item['workflow_id'],item['head_sha'])).fetchall()
+        matched_ids=[int(i['run_id']) for i in ids]
+        timed=con.execute('''SELECT SUM(duration_seconds) FROM usage_jobs
+          WHERE scan_id=? AND run_id IN (SELECT run_id FROM usage_runs
+             WHERE scan_id=? AND repo=? AND workflow_id=? AND head_sha=?)''',
+          (scan_id,scan_id,item['repo'],item['workflow_id'],item['head_sha'])).fetchone()[0]
+        overlap.append({'repository':item['repo'],'workflow':item['workflow_name'],
+                        'head_sha':item['head_sha'],'run_ids':matched_ids,
+                        'events':[i['event'] for i in ids],
+                        'observed_job_wall_minutes':round((timed or 0)/60,2)})
+    no_jobs=con.execute('''SELECT r.repo,r.run_id,r.workflow_name,r.status,r.conclusion
+       FROM usage_runs r WHERE r.scan_id=? AND NOT EXISTS
+       (SELECT 1 FROM usage_jobs j WHERE j.scan_id=r.scan_id AND j.run_id=r.run_id)
+       ORDER BY r.repo,r.run_id LIMIT 100''',(scan_id,)).fetchall()
+    no_job_count=con.execute('''SELECT COUNT(*) FROM usage_runs r
+       WHERE r.scan_id=? AND NOT EXISTS
+       (SELECT 1 FROM usage_jobs j WHERE j.scan_id=r.scan_id AND j.run_id=r.run_id)''',(scan_id,)).fetchone()[0]
     return {
       'schema': 'aeroforge.usage.evidence.v1',
       'scan': dict(row),
       'workflows': workflows,
+      'observed_same_sha_push_pr': {'groups':overlap, 'count':len(overlap),
+           'interpretation':'Both triggers ran the same workflow for the same SHA within this sampled window. Review whether both were required; no billed-minute savings are asserted.'},
+      'runs_without_observed_jobs': {'count':no_job_count, 'sample':[dict(r) for r in no_jobs],
+           'interpretation':'No jobs appeared in the returned job history. This may reflect billing restrictions, skipped/cancelled workflows, permissions or other causes; it does NOT establish a specific failure reason.'},
       'interpretation': 'Only observed jobs in sampled GitHub runs. Elapsed job time is NOT GitHub-billed minutes: billing rounds job duration, depends on platform/multipliers, runner type and other policy. Sample may omit runs, retries, or data due to limits or permissions.',
       'estimated_savings_minutes': None,
       'authorization': 'Read-only observation; no automated workflow modifications',
@@ -218,13 +275,18 @@ def scan_usage(con, owner='aerovista-us', *, days=30, max_repos=100, max_runs_pe
                 if not isinstance(rid,int) or rid<=0:
                     stats['errors']+=1;partial=True;continue
                 con.execute('''INSERT INTO usage_runs
-                  (run_id,repo,workflow_id,workflow_name,event,status,conclusion,created_at,html_url,scan_id)
-                  VALUES (?,?,?,?,?,?,?,?,?,?)
+                  (run_id,repo,workflow_id,workflow_name,head_sha,head_branch,run_attempt,event,status,conclusion,created_at,html_url,scan_id)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                   ON CONFLICT(scan_id,run_id) DO UPDATE SET repo=excluded.repo, workflow_id=excluded.workflow_id,
-                  workflow_name=excluded.workflow_name,event=excluded.event,status=excluded.status,
+                  workflow_name=excluded.workflow_name,head_sha=excluded.head_sha,
+                  head_branch=excluded.head_branch,run_attempt=excluded.run_attempt,
+                  event=excluded.event,status=excluded.status,
                   conclusion=excluded.conclusion,created_at=excluded.created_at,
                   html_url=excluded.html_url,scan_id=excluded.scan_id''',
                   (rid,name,run.get('workflow_id'),str(run.get('name') or '(unnamed)')[:220],
+                   canonical_sha(run.get('head_sha')),
+                   str(run.get('head_branch') or '')[:120],
+                   run.get('run_attempt') if isinstance(run.get('run_attempt'),int) else None,
                    str(run.get('event') or '')[:64],str(run.get('status') or '')[:48],
                    str(run.get('conclusion') or '')[:48],run.get('created_at'),
                    str(run.get('html_url') or '')[:500],scan_id))

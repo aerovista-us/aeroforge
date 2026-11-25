@@ -48,3 +48,21 @@ The offline fixture is synthetic and the resulting report is explicitly marked *
 - GitHub data stays in a local SQLite DB and exported report files; keep the state directory on a private ext4/NTFS volume.
 - Do not run untrusted workflow code, install a runner, change repository visibility, change billing limits, or publish checks in this phase.
 - GitHub search previously returned 201 owner repositories (151 public/50 private). That is an **earlier metadata search observation**, not proof of V0.2 authenticated workflow/run scan coverage.
+
+## V0.2.1 — Diagnosing duplicated and unstarted runs without guessing
+
+The historical report now includes `observed_same_sha_push_pr`, keyed by a matching
+GitHub workflow ID, repository and **validated commit SHA**. This proves only that
+both push and pull-request run records occurred for the same commit in the sampled
+window. It does **not** prove those runs were redundant or establish billable minutes.
+GitHub can assign a synthetic merge SHA to PR runs; an empty result is not proof
+of no duplicate execution. Review the branch and PR settings before proposing edits.
+
+`runs_without_observed_jobs` counts runs whose fetched job list was empty or
+unavailable. It cannot tell whether the cause was an exhausted Actions allowance,
+cancellation, workflow skipping, API permissions or a retrieval error. In a partial
+scan, look at the scan-level error notes before drawing conclusions.
+
+The new fields work with previously created V0.2 SQLite databases through a
+non-destructive schema migration. ForgeDeck presents these findings as evidence
+for human review, not as spending reductions or successful fixes.

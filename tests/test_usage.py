@@ -10,7 +10,7 @@ from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from aeroforge.storage import connect
-from aeroforge.usage import scan_usage,latest_usage,job_duration_seconds,runner_kind
+from aeroforge.usage import scan_usage,latest_usage,job_duration_seconds,runner_kind,canonical_sha,ensure_schema
 from aeroforge.dashboard import build
 from aeroforge.github import GithubError
 
@@ -21,9 +21,9 @@ class FakeReader:
         self.repos=[{'full_name':'aerovista-us/ACOS','owner':{'login':'aerovista-us'},'default_branch':'main','private':True},
                     {'full_name':'aerovista-us/lenora-voss','owner':{'login':'aerovista-us'},'default_branch':'main','private':True}]
         self.results={
-          'ACOS': [{'id':7001,'workflow_id':11,'name':'Main Tests','status':'completed','conclusion':'success','event':'push','created_at':'2026-11-22T10:00:00Z'},
-                   {'id':7002,'workflow_id':11,'name':'Main Tests','status':'completed','conclusion':'failure','event':'pull_request','created_at':'2026-11-23T10:00:00Z'}],
-          'lenora-voss':[{'id':7003,'workflow_id':12,'name':'<img onerror=alert(1)>','status':'completed','conclusion':'success','event':'push','created_at':'2026-11-23T10:00:00Z'}]
+          'ACOS': [{'id':7001,'workflow_id':11,'head_sha':'a'*40,'head_branch':'feature/demo','run_attempt':1,'name':'Main Tests','status':'completed','conclusion':'success','event':'push','created_at':'2026-11-22T10:00:00Z'},
+                   {'id':7002,'workflow_id':11,'head_sha':'a'*40,'head_branch':'feature/demo','run_attempt':1,'name':'Main Tests','status':'completed','conclusion':'failure','event':'pull_request','created_at':'2026-11-23T10:00:00Z'}],
+          'lenora-voss':[{'id':7003,'workflow_id':12,'head_sha':'b'*40,'name':'<img onerror=alert(1)>','status':'completed','conclusion':'success','event':'push','created_at':'2026-11-23T10:00:00Z'}]
         }
         self.jobs={
           7001:[{'id':9001,'status':'completed','conclusion':'success','started_at':'2026-11-22T10:00:00Z','completed_at':'2026-11-22T10:03:00Z','labels':['ubuntu-latest']}],
@@ -100,6 +100,53 @@ class UsageTests(unittest.TestCase):
         self.assertNotIn('<img onerror=alert(1)>',page)
         self.assertIn('Observed job wall-min',page)
         self.assertIn('not billed GitHub Actions minutes',page)
+    def test_proven_push_pr_same_sha_candidates(self):
+        self.scan(max_repos=10,max_requests=30)
+        summary=latest_usage(self.db)
+        overlap=summary['observed_same_sha_push_pr']
+        self.assertEqual(overlap['count'],1)
+        self.assertEqual(overlap['groups'][0]['repository'],'aerovista-us/ACOS')
+        self.assertEqual(overlap['groups'][0]['run_ids'],[7001,7002])
+        self.assertEqual(overlap['groups'][0]['observed_job_wall_minutes'],4)
+        self.assertIsNone(summary['estimated_savings_minutes'])
+    def test_unmatched_sha_does_not_invent_duplicate(self):
+        fake=FakeReader()
+        fake.results['ACOS'][1]['head_sha']='c'*40
+        self.scan(fake,max_repos=10,max_requests=30)
+        self.assertEqual(latest_usage(self.db)['observed_same_sha_push_pr']['count'],0)
+    def test_no_returned_jobs_is_inconclusive(self):
+        fake=FakeReader();fake.jobs[7002]=[]
+        self.scan(fake,max_repos=10,max_requests=30)
+        info=latest_usage(self.db)['runs_without_observed_jobs']
+        self.assertEqual(info['count'],1)
+        self.assertEqual(info['sample'][0]['run_id'],7002)
+        self.assertIn('does NOT establish a specific failure reason',info['interpretation'])
+    def test_canonical_sha(self):
+        self.assertEqual(canonical_sha('A'*40),'a'*40)
+        self.assertIsNone(canonical_sha('Z'*40))
+        self.assertIsNone(canonical_sha('abc'))
+    def test_legacy_schema_upgrade_keeps_old_rows(self):
+        self.db.execute("""CREATE TABLE usage_runs (
+           run_id INTEGER NOT NULL,repo TEXT NOT NULL,workflow_id INTEGER,
+           workflow_name TEXT NOT NULL,event TEXT NOT NULL,status TEXT NOT NULL,
+           conclusion TEXT,created_at TEXT,html_url TEXT,scan_id INTEGER NOT NULL,
+           PRIMARY KEY(scan_id,run_id))""")
+        self.db.execute("""INSERT INTO usage_runs
+            (run_id,repo,workflow_name,event,status,scan_id)
+            VALUES (10,'example/repo','Build','push','completed',1)""")
+        self.db.commit()
+        ensure_schema(self.db)
+        self.assertIn('head_sha',[r['name'] for r in self.db.execute('PRAGMA table_info(usage_runs)')])
+        self.assertEqual(self.db.execute('SELECT run_id FROM usage_runs').fetchone()['run_id'],10)
+    def test_dashboard_distinguishes_overlaps_and_missing_jobs(self):
+        fake=FakeReader();fake.jobs[7003]=[]
+        self.scan(fake,max_repos=10,max_requests=30)
+        page=build(self.db).read_text()
+        self.assertIn('Observed push/PR overlap',page)
+        self.assertIn('Runs without returned jobs',page)
+        self.assertIn('does not diagnose GitHub billing',page)
+        self.assertIn('&lt;img onerror=alert(1)&gt;',page)
+
     def test_no_real_execution_behind_fixture(self):
         self.scan(max_repos=10,max_requests=30,source='fixture')
         self.assertTrue(latest_usage(self.db)['scan']['partial'])
