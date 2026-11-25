@@ -1,13 +1,25 @@
 # AeroForge
 **Build. Verify. Deliver.** An AeroVista product powered by Nexus TechWorks.
 
-AeroForge V0.1 is a working, resource-conscious foundation for GitHub workflow intelligence and local static validation. The project deliberately includes **no active `.github/workflows/` automation**, preserving the goal of **zero additional GitHub-hosted runner minutes** while the Free plan allowance is exhausted.
+AeroForge V0.2 (stacked on V0.1) is a working, resource-conscious foundation for GitHub workflow intelligence and local static validation. The project deliberately includes **no active `.github/workflows/` automation**, preserving the goal of **zero additional GitHub-hosted runner minutes** while the Free plan allowance is exhausted.
 
 ## What works
 - **ForgeBudget + ForgeBridge (read-only):** Scan GitHub repositories and workflow YAML via GET requests only; record workflow triggers and actionable cost-optimization candidates. GitHub API rate limits apply. The scanner does not start or re-run jobs.
 - **ForgeCore + ForgeRunner (safe lane):** Persistent SQLite queue with one worker lock; AST parsing, JSON parsing, GitHub workflow analysis, and file inventory. **No arbitrary shell, test suite, or repository program execution.**
 - **ForgeGuard + ForgeLedger:** Path allowlists, symlink exclusion, size and wall-clock caps, SHA-256 evidence receipts, and durable status history.
 - **ForgeDeck:** Self-contained HTML dashboard that works offline and is safe to open over the ACOS file share.
+
+## V0.2: historical Actions usage observation
+
+A separate read-only usage scanner retrieves a bounded sample of Actions workflow runs and their job start/end times. It adds a ranked *observed job-walltime* table to ForgeDeck, with explicit scan coverage, request caps, SHA-256 reports and safe resume slices. It never calls a workflow dispatch or rerun endpoint.
+
+```bash
+python3 -m aeroforge scan-usage --owner aerovista-us --days 30 --max-repos 250 --max-runs-per-repo 6 --max-requests 1500
+python3 -m aeroforge usage-report
+python3 -m aeroforge dashboard
+```
+
+Read [docs/usage.md](docs/usage.md) before live use. **Runtime ≠ GitHub-billed minutes.** We do not report unverified billable minutes or savings. Historical scans remain partial when capped or permission-restricted. An offline synthetic example is available via `import-usage-fixture`.
 
 ## Quick start on your own machine
 
@@ -71,7 +83,7 @@ Warnings are **review candidates**, not automatic edits. For `push` + `pull_requ
 
 ## Roadmap
 
-1. **V0.2:** Acquire a full authoritative GitHub repository/workflow inventory; attach actual workflow run frequencies/elapsed times and rank by measurable savings.
+1. **V0.2:** Add read-only run/job observation and explicit partial-coverage reporting (implemented). Full authorized AeroVista scan and verified billing reconciliation remain open.
 2. **V0.3:** External isolated runner with enforced CPU/RAM/time constraints and no production secrets; signed evidence + required manual approval.
 3. **V0.4:** ForgeBridge to VCliq + AVCC Release Board with authenticated read-only discovery and evidence reconciliation.
 4. **V1:** ForgeDeck multiuser dashboard, authorized scoped execution, release gating and optional local AI resource planning.
