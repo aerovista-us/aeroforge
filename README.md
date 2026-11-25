@@ -89,3 +89,10 @@ Warnings are **review candidates**, not automatic edits. For `push` + `pull_requ
 4. **V1:** ForgeDeck multiuser dashboard, authorized scoped execution, release gating and optional local AI resource planning.
 
 See [docs/architecture.md](docs/architecture.md) for interfaces and controls.
+
+### V0.2.1 historical evidence improvements
+
+- Captures validated commit SHAs, branch names and run attempt from GitHub run metadata.
+- Flags observed same-SHA push/PR pairs and runs returning no jobs without claiming billed-minute savings or a billing diagnosis.
+- Performs in-place non-destructive migration of V0.2 SQLite usage history.
+- Shows the new evidence categories on the offline ForgeDeck dashboard.
