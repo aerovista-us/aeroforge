@@ -8,7 +8,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-class GithubError(RuntimeError):pass
+class GithubError(RuntimeError):
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code=status_code
 
 class GithubReader:
     def __init__(self,token=None,timeout=12):
@@ -29,7 +32,7 @@ class GithubReader:
                 return json.loads(r.read(4_000_000))
         except urllib.error.HTTPError as exc:
             # Never leak token, body, or credentials in public status reports.
-            raise GithubError('GitHub read failed: HTTP '+str(exc.code)) from None
+            raise GithubError('GitHub read failed: HTTP '+str(exc.code),status_code=exc.code) from None
         except (TimeoutError,urllib.error.URLError) as exc:
             raise GithubError('GitHub read unavailable: '+type(exc).__name__) from None
 

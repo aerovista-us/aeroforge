@@ -104,3 +104,7 @@ An authenticated GET-only scan on NXCore observed 202 repositories, 80 workflow 
 ## ForgeRunner V0.3
 
 ForgeRunner adds an inert SQLite sandbox queue and explicit, approved Python unittest execution in a no-network, read-only, non-root Docker container with hard memory/CPU/PID limits. The trusted control plane uses a full pinned Git commit and local image ID, rejects secret-like paths and symlinks, verifies the real Docker configuration before launch and inspects actual container exit status. It does **not** mount host credentials or the Docker socket inside the container. It is disabled by default; see [docs/sandbox.md](docs/sandbox.md). The trusted Docker daemon itself remains a root-level host privilege; run untrusted code on dedicated worker infrastructure for stronger isolation.
+
+### V0.3.1 — account-wide diagnostics and prioritization
+
+A fresh authenticated inventory distinguishes workflow YAML HTTP 404s, workflow metadata authorization errors, and source parser failures in a durable per-scan table. The separately verified November 26, 2026 audit classified 41 stale workflow-file references as files absent from default-branch Git trees. Across 51 private repositories, 749 workflow run records were observed in 30 days, 647 (86.4%) from ACOS. **Run counts are not billable minutes.** See [docs/actions-baseline-2026-11-26.md](docs/actions-baseline-2026-11-26.md). No workflows were disabled or changed automatically.

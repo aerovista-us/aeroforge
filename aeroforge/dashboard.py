@@ -17,6 +17,18 @@ def build(con):
     jobs=[dict(r) for r in con.execute('SELECT * FROM jobs ORDER BY id DESC LIMIT 200')]
     latest=con.execute('SELECT * FROM scans ORDER BY id DESC LIMIT 1').fetchone()
     last='No GitHub inventory yet' if not latest else f'GitHub scan: {latest["repos_scanned"]} repos · {latest["workflows_scanned"]} workflows · {latest["errors"]} errors · '+('partial' if latest['partial'] else 'complete')
+    issue_html=''
+    exists=con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='inventory_issues'").fetchone()
+    if latest and exists:
+        issues=con.execute(
+            "SELECT category,count(*) FROM inventory_issues WHERE scan_id=? GROUP BY category ORDER BY count(*) DESC",
+            (latest['id'],)).fetchall()
+        if issues:
+            items=''.join('<li>'+esc(cat)+' — '+str(count)+'</li>' for cat,count in issues)
+            issue_html=('<section class="usage"><h2 class="sectionTitle">Workflow inventory diagnostics</h2>'
+                '<div class="bar">GitHub workflow source and metadata retrieval errors, classified by category. '
+                'A 404 does not establish a failed CI job or billing problem.</div>'
+                '<ul>'+items+'</ul></section>')
     stats_html=''.join('<div class="stat"><strong>'+str(v)+'</strong><span>'+esc(k.capitalize())+'</span></div>' for k,v in data.items())
     finding_cards=''.join('''<article class="card finding" data-search="{search}"><div class="meta">{repo} · {path}</div><h3>{rule}</h3><div class="tag">{severity} · {confidence} confidence</div><p>{summary}</p><p class="recommend"><b>Review:</b> {recommend}</p></article>'''.format(**{
       'search':esc(' '.join([r['repo'],r['path'],r['rule'],r['summary']]).lower()),
@@ -50,10 +62,11 @@ def build(con):
 <section class="stats">__STATS__</section><div class="bar">__SCANNOTE__<br>__VISIBILITY__</div>
 __USAGE__
 __SANDBOX__
+__INVENTORY_ERRORS__
 <div class="columns"><section><div class="titleRow"><h2 class="sectionTitle">Workflow opportunities</h2><span class="label">Review required</span></div><input class="search" id="search" placeholder="Filter by repository, rule, or path" aria-label="Filter findings"><div class="cards" id="findings">__FINDINGS__</div></section><aside><h2 class="sectionTitle">Local verification queue</h2>__JOBS__<div class="bar">Static checks only: Python AST, JSON parsing, workflow analysis and inventory. Untrusted repository code is never executed.</div></aside></div>
 <div class="foot">Generated __DATE__. Audit suggestions are advisory, not completed GitHub Actions changes. No paid runners or production deployments were started by this dashboard.</div></div><script>const q=document.getElementById('search');q.addEventListener('input',()=>{const s=q.value.toLowerCase();for(const c of document.querySelectorAll('.finding'))c.hidden=!c.dataset.search.includes(s)});</script></body></html>'''
     vis=', '.join(str(v)+' '+k for k,v in kinds) or 'No repositories indexed'
-    page=page.replace('__USAGE__',usage_html).replace('__SANDBOX__',sandbox_html)
+    page=page.replace('__USAGE__',usage_html).replace('__SANDBOX__',sandbox_html).replace('__INVENTORY_ERRORS__',issue_html)
     page=page.replace('__STATS__',stats_html).replace('__SCANNOTE__',esc(last)).replace('__VISIBILITY__',esc(vis))
     page=page.replace('__FINDINGS__',finding_cards or '<div class="empty">No findings yet. Import a fixture or scan GitHub to populate this view.</div>')
     page=page.replace('__JOBS__',job_cards or '<div class="empty">No local checks queued.</div>').replace('__DATE__',esc(now()))
