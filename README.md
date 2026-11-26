@@ -1,11 +1,11 @@
 # AeroForge
 **Build. Verify. Deliver.** An AeroVista product powered by Nexus TechWorks.
 
-AeroForge V0.2 (stacked on V0.1) is a working, resource-conscious foundation for GitHub workflow intelligence and local static validation. The project deliberately includes **no active `.github/workflows/` automation**, preserving the goal of **zero additional GitHub-hosted runner minutes** while the Free plan allowance is exhausted.
+AeroForge V0.3 (stacked on V0.2.1) is a working, resource-conscious foundation for GitHub workflow intelligence and local static validation. The project deliberately includes **no active `.github/workflows/` automation**, preserving the goal of **zero additional GitHub-hosted runner minutes** while the Free plan allowance is exhausted.
 
 ## What works
 - **ForgeBudget + ForgeBridge (read-only):** Scan GitHub repositories and workflow YAML via GET requests only; record workflow triggers and actionable cost-optimization candidates. GitHub API rate limits apply. The scanner does not start or re-run jobs.
-- **ForgeCore + ForgeRunner (safe lane):** Persistent SQLite queue with one worker lock; AST parsing, JSON parsing, GitHub workflow analysis, and file inventory. **No arbitrary shell, test suite, or repository program execution.**
+- **ForgeCore + ForgeRunner (safe lane):** Persistent SQLite queue with one worker lock; AST parsing, JSON parsing, GitHub workflow analysis, and file inventory. **No arbitrary shell or repository code execution in the default static lane.** Explicitly approved container-based unittest execution is separate and disabled by default.
 - **ForgeGuard + ForgeLedger:** Path allowlists, symlink exclusion, size and wall-clock caps, SHA-256 evidence receipts, and durable status history.
 - **ForgeDeck:** Self-contained HTML dashboard that works offline and is safe to open over the ACOS file share.
 
@@ -84,7 +84,7 @@ Warnings are **review candidates**, not automatic edits. For `push` + `pull_requ
 ## Roadmap
 
 1. **V0.2:** Add read-only run/job observation and explicit partial-coverage reporting (implemented). Full authorized AeroVista scan and verified billing reconciliation remain open.
-2. **V0.3:** External isolated runner with enforced CPU/RAM/time constraints and no production secrets; signed evidence + required manual approval.
+2. **V0.3:** Docker-isolated approved unittest runner with enforced CPU/RAM/PID/time caps, pinned local image and commit, private state and evidence receipts (implemented preview). NXCore runtime smoke remains blocked by swap safety threshold; see [docs/sandbox.md](docs/sandbox.md).
 3. **V0.4:** ForgeBridge to VCliq + AVCC Release Board with authenticated read-only discovery and evidence reconciliation.
 4. **V1:** ForgeDeck multiuser dashboard, authorized scoped execution, release gating and optional local AI resource planning.
 
@@ -96,3 +96,11 @@ See [docs/architecture.md](docs/architecture.md) for interfaces and controls.
 - Flags observed same-SHA push/PR pairs and runs returning no jobs without claiming billed-minute savings or a billing diagnosis.
 - Performs in-place non-destructive migration of V0.2 SQLite usage history.
 - Shows the new evidence categories on the offline ForgeDeck dashboard.
+
+## Live AeroVista baseline (2026-11-25)
+
+An authenticated GET-only scan on NXCore observed 202 repositories, 80 workflow definitions and 147 advisory findings. Workflow inventory has 41 retrieval errors and is **partial**. Historical 30-day sampled data includes 120 runs, 189 jobs and 60.5 observed job wall-minutes (not GitHub-billed usage). See [docs/baseline-2026-11-25.md](docs/baseline-2026-11-25.md) and private evidence on AV-MEMORY. No workflows were triggered by these scans.
+
+## ForgeRunner V0.3
+
+ForgeRunner adds an inert SQLite sandbox queue and explicit, approved Python unittest execution in a no-network, read-only, non-root Docker container with hard memory/CPU/PID limits. The trusted control plane uses a full pinned Git commit and local image ID, rejects secret-like paths and symlinks, verifies the real Docker configuration before launch and inspects actual container exit status. It does **not** mount host credentials or the Docker socket inside the container. It is disabled by default; see [docs/sandbox.md](docs/sandbox.md). The trusted Docker daemon itself remains a root-level host privilege; run untrusted code on dedicated worker infrastructure for stronger isolation.

@@ -5,7 +5,7 @@ description = "Read-only GitHub workflow intelligence and bounded local static C
 requires-python = ">=3.11"
 
 [project.scripts]
-aeroforge = "aeroforge.cli:cli"
+aeroforge = "aeroforge.cli:main"
 
 [build-system]
 requires = ["setuptools>=61"]

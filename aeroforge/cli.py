@@ -10,6 +10,7 @@ from .worker import enqueue,run_next,KINDS
 from .dashboard import build
 from .usage import scan_usage, latest_usage
 from .usage_fixture import read_usage_fixture
+from .sandbox import submit as sandbox_submit, run_next as sandbox_run_next, queue_status as sandbox_queue_status, SandboxDenied
 
 
 def cli(argv=None):
@@ -28,6 +29,14 @@ def cli(argv=None):
     a=sub.add_parser('import-usage-fixture',help='Offline synthetic example; never claims live usage');a.add_argument('path')
     a=sub.add_parser('import-fixture');a.add_argument('path')
     a=sub.add_parser('enqueue');a.add_argument('--kind',required=True,choices=KINDS);a.add_argument('--target',required=True)
+    a=sub.add_parser('sandbox-submit',help='Queue pinned Git commit for sandbox unittest execution')
+    a.add_argument('--repo',required=True);a.add_argument('--commit',required=True)
+    a.add_argument('--profile',choices=['python_unittest'],default='python_unittest')
+    a=sub.add_parser('sandbox-run-next',help='Execute one explicitly approved isolated container job')
+    a.add_argument('--approve',action='store_true');a.add_argument('--memory-mib',type=int,default=256)
+    a.add_argument('--cpus',type=float,default=0.5);a.add_argument('--timeout-seconds',type=int,default=90)
+    a.add_argument('--image-id',default=None)
+    sub.add_parser('sandbox-status',help='List queued and completed sandbox jobs')
     sub.add_parser('run-next');sub.add_parser('dashboard');sub.add_parser('status')
     a=p.parse_args(argv)
     con=connect()
@@ -48,6 +57,10 @@ def cli(argv=None):
             path=pathlib.Path(a.path).expanduser().resolve(strict=True)
             if path.stat().st_size>2_000_000:raise ValueError('Fixture too large')
             result=scan_fixture(con,json.loads(path.read_text('utf-8')))
+        elif a.command=='sandbox-submit':result={'queued_sandbox_job_id':sandbox_submit(con,a.repo,a.commit,a.profile)}
+        elif a.command=='sandbox-run-next':result=sandbox_run_next(con,approve=a.approve,
+            memory_mib=a.memory_mib,cpus=a.cpus,timeout_seconds=a.timeout_seconds,image_id=a.image_id)
+        elif a.command=='sandbox-status':result={'sandbox_jobs':sandbox_queue_status(con)}
         elif a.command=='enqueue':result={'queued_job_id':enqueue(con,a.kind,a.target)}
         elif a.command=='run-next':result=run_next(con) or {'queue':'empty'}
         elif a.command=='status':result={'state':str(home()),'tables':stats(con),
@@ -58,8 +71,13 @@ def cli(argv=None):
         print(json.dumps(result,indent=2))
     finally:con.close()
 
-if __name__=='__main__':
-    try:cli()
+def main():
+    try:
+        cli()
     except (ValueError,PermissionError,OSError,json.JSONDecodeError,RuntimeError) as e:
         print('AeroForge error:',str(e),file=sys.stderr)
         sys.exit(2)
+
+
+if __name__=='__main__':
+    main()
