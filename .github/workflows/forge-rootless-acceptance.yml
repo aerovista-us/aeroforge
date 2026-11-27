@@ -29,6 +29,13 @@ jobs:
       - name: Prepare rootless prerequisites on disposable GitHub VM
         run: |
           set -euo pipefail
+          # A third-party Microsoft package mirror can return HTTP 403 on ephemeral VMs.
+          # Disable only that unrelated source, only on this disposable GitHub host.
+          for source_file in /etc/apt/sources.list.d/*; do
+            if [ -f "$source_file" ] && grep -q 'packages.microsoft.com' "$source_file"; then
+              sudo mv "$source_file" "$source_file.disabled"
+            fi
+          done
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq uidmap slirp4netns fuse-overlayfs dbus-user-session
 
