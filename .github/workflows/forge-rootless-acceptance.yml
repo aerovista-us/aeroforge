@@ -46,7 +46,7 @@ jobs:
           export XDG_RUNTIME_DIR="$run_dir"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=$run_dir/bus"
           systemctl --user is-active dbus.socket
-          systemd-run --user --scope --wait /usr/bin/true
+          systemd-run --user --scope /usr/bin/true
           echo "XDG_RUNTIME_DIR=$run_dir" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$run_dir/bus" >> "$GITHUB_ENV"
           echo "User systemd service and D-Bus verified on disposable VM."
