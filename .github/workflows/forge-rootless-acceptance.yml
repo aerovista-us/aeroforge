@@ -37,6 +37,10 @@ jobs:
         uses: docker/setup-docker-action@3f1ab1ab0e29231562e4db4ca600c1a49653bac6
         with:
           rootless: true
+          # Work around noninteractive systemd scope authorization on hosted VMs.
+          # The in-container probe MUST still prove actual cgroup quotas.
+          daemon-config: |
+            {"exec-opts": ["native.cgroupdriver=cgroupfs"]}
 
       - name: Verify isolated rootless daemon and socket
         env:
