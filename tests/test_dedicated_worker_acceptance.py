@@ -7,6 +7,26 @@ spec=importlib.util.spec_from_file_location('acceptance',P)
 a=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(a)
 
+class ProbePermissionChecks(unittest.TestCase):
+ def test_permission_denied_host_path_is_inaccessible_not_a_crash(self):
+  import contextlib,io,json,socket
+  buffer=io.StringIO()
+  original=pathlib.Path.exists
+  def mocked_exists(path):
+   if str(path)=="/root/.ssh":
+    raise PermissionError("protected")
+   return False
+  with patch.object(pathlib.Path,'exists',mocked_exists), \
+       patch('builtins.open',side_effect=PermissionError('read-only')), \
+       patch.object(socket,'create_connection',side_effect=OSError('network off')), \
+       contextlib.redirect_stdout(buffer):
+   exec(a.PROBE,{})
+  result=json.loads(buffer.getvalue())
+  self.assertEqual(result['unexpected_host_paths'],[])
+  self.assertEqual(result['inaccessible_host_paths'],['/root/.ssh'])
+  self.assertTrue(result['external_network_denied'])
+  self.assertTrue(result['root_filesystem_readonly'])
+
 class AcceptanceTests(unittest.TestCase):
  def test_nxcore_rejected(self):
   with self.assertRaises(a.AcceptanceDenied):a.check_host('nxcore',{'MemAvailable':8192,'SwapTotal':0,'SwapFree':0})
