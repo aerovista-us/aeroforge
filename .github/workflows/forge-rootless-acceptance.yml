@@ -43,11 +43,15 @@ jobs:
           SOURCE_SOCKET: ${{ steps.dockerd.outputs.sock }}
         run: |
           set -euo pipefail
-          test -S "$SOURCE_SOCKET"
-          test "$SOURCE_SOCKET" != "/var/run/docker.sock"
+          case "$SOURCE_SOCKET" in
+            unix:///*) source_path="${SOURCE_SOCKET#unix://}" ;;
+            *) echo "Refusing unexpected Docker socket URL" >&2; exit 2 ;;
+          esac
+          test -S "$source_path"
+          test "$source_path" != "/var/run/docker.sock"
           run_dir="/run/user/$(id -u)"
           sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "$run_dir"
-          ln -sfn "$SOURCE_SOCKET" "$run_dir/docker.sock"
+          ln -sfn "$source_path" "$run_dir/docker.sock"
           export DOCKER_HOST="unix://$run_dir/docker.sock"
           test -S "$run_dir/docker.sock"
           python3 - <<'PY'
