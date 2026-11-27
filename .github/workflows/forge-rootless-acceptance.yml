@@ -30,17 +30,32 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq uidmap slirp4netns fuse-overlayfs
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq uidmap slirp4netns fuse-overlayfs dbus-user-session
+
+      - name: Prepare user D-Bus and delegated cgroup controllers
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          sudo install -d -m 0755 /etc/systemd/system/user@.service.d
+          printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/aeroforge-ephemeral.conf >/dev/null
+          sudo systemctl daemon-reload
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl restart "user@${uid}.service"
+          run_dir="/run/user/${uid}"
+          test -S "$run_dir/bus"
+          export XDG_RUNTIME_DIR="$run_dir"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$run_dir/bus"
+          systemctl --user is-active dbus.socket
+          systemd-run --user --scope --wait /usr/bin/true
+          echo "XDG_RUNTIME_DIR=$run_dir" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$run_dir/bus" >> "$GITHUB_ENV"
+          echo "User systemd service and D-Bus verified on disposable VM."
 
       - name: Start rootless Docker on disposable worker
         id: dockerd
         uses: docker/setup-docker-action@3f1ab1ab0e29231562e4db4ca600c1a49653bac6
         with:
           rootless: true
-          # Work around noninteractive systemd scope authorization on hosted VMs.
-          # The in-container probe MUST still prove actual cgroup quotas.
-          daemon-config: |
-            {"exec-opts": ["native.cgroupdriver=cgroupfs"]}
 
       - name: Verify isolated rootless daemon and socket
         env:
