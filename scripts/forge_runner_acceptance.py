@@ -190,7 +190,10 @@ def run_runtime(image, host):
         static_checks = verify_container(inspected)
         started = execute(["docker", "start", "-a", cid], timeout=WALL_TIMEOUT)
         if started.returncode:
-            raise AcceptanceDenied("Docker attach/start returned nonzero status")
+            # Fixed probe has no credentials; include only a bounded diagnostic.
+            # Never relax the resource policy to obtain a green check.
+            detail = " ".join((getattr(started, "stderr", None) or getattr(started, "stdout", None) or "").strip().split())[:240]
+            raise AcceptanceDenied("Docker start failed (exit %s): %s" % (started.returncode, detail))
         response = execute(["docker", "inspect", cid])
         if response.returncode:
             raise AcceptanceDenied("Post-execution Docker inspect failed")
