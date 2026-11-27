@@ -27,8 +27,13 @@ CID_RE = re.compile(r"[0-9a-f]{64}\Z")
 # Executed ONLY inside the disposable, non-networked container; no source bind.
 PROBE = '''import json,os,pathlib,socket
 blocked=[]
+inaccessible=[]
 for p in ("/srv/ACOS","/srv/AV-MEMORY","/root/.ssh","/var/run/docker.sock"):
- if pathlib.Path(p).exists(): blocked.append(p)
+ try:
+  if pathlib.Path(p).exists(): blocked.append(p)
+ except PermissionError:
+  # Cannot even stat the path as a non-root process => inaccessible.
+  inaccessible.append(p)
 external_denied=False
 try:
  sock=socket.create_connection(("1.1.1.1",443),timeout=2)
@@ -45,7 +50,8 @@ for n in ("memory.max","cpu.max","pids.max"):
  p=pathlib.Path("/sys/fs/cgroup")/n
  limits[n]=p.read_text().strip() if p.exists() else None
 print(json.dumps({"uid":os.getuid(),"gid":os.getgid(),"external_network_denied":external_denied,
- "root_filesystem_readonly":root_read_only,"unexpected_host_paths":blocked,"cgroup":limits}))
+ "root_filesystem_readonly":root_read_only,"unexpected_host_paths":blocked,
+ "inaccessible_host_paths":inaccessible,"cgroup":limits}))
 '''
 
 
@@ -190,7 +196,10 @@ def run_runtime(image, host):
         static_checks = verify_container(inspected)
         started = execute(["docker", "start", "-a", cid], timeout=WALL_TIMEOUT)
         if started.returncode:
-            raise AcceptanceDenied("Docker attach/start returned nonzero status")
+            # Fixed probe has no credentials; include only a bounded diagnostic.
+            # Never relax the resource policy to obtain a green check.
+            detail = " ".join((getattr(started, "stderr", None) or getattr(started, "stdout", None) or "").strip().split())[:240]
+            raise AcceptanceDenied("Docker start failed (exit %s): %s" % (started.returncode, detail))
         response = execute(["docker", "inspect", cid])
         if response.returncode:
             raise AcceptanceDenied("Post-execution Docker inspect failed")

@@ -1,0 +1,132 @@
+name: AeroForge rootless acceptance (ephemeral)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/forge-rootless-acceptance.yml'
+      - 'scripts/forge_runner_acceptance.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forge-rootless-acceptance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  boundary-probe:
+    name: Isolated rootless runtime probe
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout without persisted GitHub credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Prepare rootless prerequisites on disposable GitHub VM
+        run: |
+          set -euo pipefail
+          # A third-party Microsoft package mirror can return HTTP 403 on ephemeral VMs.
+          # Disable only that unrelated source, only on this disposable GitHub host.
+          for source_file in /etc/apt/sources.list.d/*; do
+            if [ -f "$source_file" ] && grep -q 'packages.microsoft.com' "$source_file"; then
+              sudo mv "$source_file" "$source_file.disabled"
+            fi
+          done
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq uidmap slirp4netns fuse-overlayfs dbus-user-session
+
+      - name: Prepare user D-Bus and delegated cgroup controllers
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          sudo install -d -m 0755 /etc/systemd/system/user@.service.d
+          printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/aeroforge-ephemeral.conf >/dev/null
+          sudo systemctl daemon-reload
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl restart "user@${uid}.service"
+          run_dir="/run/user/${uid}"
+          test -S "$run_dir/bus"
+          export XDG_RUNTIME_DIR="$run_dir"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$run_dir/bus"
+          systemctl --user is-active dbus.socket
+          systemd-run --user --scope /usr/bin/true
+          echo "XDG_RUNTIME_DIR=$run_dir" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$run_dir/bus" >> "$GITHUB_ENV"
+          echo "User systemd service and D-Bus verified on disposable VM."
+
+      - name: Start rootless Docker on disposable worker
+        id: dockerd
+        uses: docker/setup-docker-action@3f1ab1ab0e29231562e4db4ca600c1a49653bac6
+        with:
+          rootless: true
+
+      - name: Verify isolated rootless daemon and socket
+        env:
+          SOURCE_SOCKET: ${{ steps.dockerd.outputs.sock }}
+        run: |
+          set -euo pipefail
+          case "$SOURCE_SOCKET" in
+            unix:///*) source_path="${SOURCE_SOCKET#unix://}" ;;
+            *) echo "Refusing unexpected Docker socket URL" >&2; exit 2 ;;
+          esac
+          test -S "$source_path"
+          test "$source_path" != "/var/run/docker.sock"
+          run_dir="/run/user/$(id -u)"
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "$run_dir"
+          ln -sfn "$source_path" "$run_dir/docker.sock"
+          export DOCKER_HOST="unix://$run_dir/docker.sock"
+          test -S "$run_dir/docker.sock"
+          python3 - <<'PY'
+          import json,subprocess
+          p=subprocess.run(["docker","info","--format","{{json .}}"],capture_output=True,text=True,check=True)
+          data=json.loads(p.stdout)
+          assert any("rootless" in str(x).lower() for x in data.get("SecurityOptions",[])), "Refuse rootful Docker"
+          print("Rootless engine:", data.get("ServerVersion"), "cgroups:", data.get("CgroupDriver"), data.get("CgroupVersion"))
+          PY
+          {
+            echo "Worker: GitHub-hosted disposable ubuntu-24.04; no AeroVista production mounts"
+            echo "Engine security options:"
+            docker info --format '{{json .SecurityOptions}}'
+            echo "Engine cgroups:"
+            docker info --format 'CgroupDriver={{.CgroupDriver}} CgroupVersion={{.CgroupVersion}}'
+          } > ci-rootless-diagnostics.txt
+
+      - name: Pull public Python image into rootless worker and pin local image ID
+        run: |
+          set -euo pipefail
+          export DOCKER_HOST="unix:///run/user/$(id -u)/docker.sock"
+          docker pull python:3.12-alpine
+          docker image inspect python:3.12-alpine --format '{{.Id}}' > ci-rootless-image-id.txt
+
+      - name: Run actual container boundary acceptance
+        run: |
+          set -euo pipefail
+          image_id="$(cat ci-rootless-image-id.txt)"
+          python3 scripts/forge_runner_acceptance.py \
+            --image-id "$image_id" \
+            --approve-runtime \
+            --output rootless-acceptance.json
+          python3 - <<'PY'
+          import json
+          doc=json.load(open('rootless-acceptance.json'))
+          assert doc['accepted'] is True
+          assert len(doc['docker_checks']) >= 14 and all(doc['docker_checks'].values())
+          assert len(doc['runtime_checks']) >= 7 and all(doc['runtime_checks'].values())
+          print("Real rootless isolation checks accepted.")
+          PY
+
+      - name: Store nonsecret acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ephemeral-rootless-acceptance
+          path: |
+            ci-rootless-diagnostics.txt
+            ci-rootless-image-id.txt
+            rootless-acceptance.json
+          if-no-files-found: warn
+          retention-days: 14
